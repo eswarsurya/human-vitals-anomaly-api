@@ -1,134 +1,89 @@
 # Human Vitals Anomaly Detection API
 
-A production-ready Flask REST API for real-time anomaly detection in human vital signs using Isolation Forest machine learning.
+A Flask REST API that serves **Isolation Forest anomaly detection** for human vital-sign inputs, based on the machine-learning work from my MSc Data Analytics thesis.
 
-## Features
+## Why this project matters
 
-- **Real-time anomaly detection** for heart rate, blood pressure, temperature, and SpO2
-- **Batch prediction** support for multiple samples
-- **Explainability endpoint** for feature contribution analysis
-- **Health check** endpoint for monitoring
-- **Docker containerization** for cloud deployment
-- **Production-ready** with Gunicorn WSGI server
+This repository extends the thesis work from offline analysis into a **service-oriented ML workflow**. It demonstrates how an anomaly-detection approach can be exposed through HTTP endpoints for prediction, batch processing, explainability, and health monitoring.
 
-## Quick Start
+## What it demonstrates
 
-### Local Development
+- REST API design with Flask
+- Machine-learning inference with Isolation Forest
+- Batch prediction support
+- Explainability endpoint architecture
+- Health-check endpoint
+- Docker containerization
+- Gunicorn production serving
+- Deployment-oriented project structure
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+## Example
 
-# Run Flask app
-python app.py
-
-# Test health endpoint
+~~~bash
 curl http://localhost:5000/health
-```
+~~~
 
-### Docker Deployment
+~~~json
+{
+  "heart_rate": 75,
+  "bp_systolic": 120,
+  "bp_diastolic": 80,
+  "temperature": 36.6,
+  "spo2": 98
+}
+~~~
 
-```bash
-# Build and run with Docker Compose
+## Model context
+
+- **Algorithm:** Isolation Forest
+- **Thesis dataset scale:** 200,020 multivariate records
+- **Features:** heart rate, blood pressure, temperature, SpO2
+- **Explainability:** SHAP-ready architecture
+
+## Run locally
+
+~~~bash
+pip install -r requirements.txt
+python app.py
+~~~
+
+Or use Docker:
+
+~~~bash
 docker-compose up --build
+~~~
 
-# Or build manually
-docker build -t vitals-anomaly-api .
-docker run -p 5000:5000 vitals-anomaly-api
-```
+## API surface
 
-## API Endpoints
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Service health check |
+| `POST /predict` | Single or batch anomaly prediction |
+| `POST /explain` | Feature-contribution analysis |
 
-### Health Check
-```bash
-GET /health
-```
+## Project structure
 
-### Predict Anomaly (Single)
-```bash
-POST /predict
-Content-Type: application/json
-
-{
-    "heart_rate": 75,
-    "bp_systolic": 120,
-    "bp_diastolic": 80,
-    "temperature": 36.6,
-    "spo2": 98
-}
-```
-
-### Predict Anomaly (Batch)
-```bash
-POST /predict
-Content-Type: application/json
-
-{
-    "data": [
-        [75, 120, 80, 36.6, 98],
-        [150, 180, 110, 39.5, 85]
-    ]
-}
-```
-
-### Explain Prediction
-```bash
-POST /explain
-Content-Type: application/json
-
-{
-    "heart_rate": 150,
-    "bp_systolic": 180,
-    "bp_diastolic": 110,
-    "temperature": 39.5,
-    "spo2": 85
-}
-```
-
-## Model Details
-
-- **Algorithm**: Isolation Forest
-- **Training Data**: 200,020 multivariate records (MSc thesis dataset)
-- **Features**: Heart rate, BP systolic, BP diastolic, temperature, SpO2
-- **Contamination**: 5% (expected anomaly rate)
-- **Explainability**: SHAP-ready architecture for clinical transparency
-
-## Cloud Deployment
-
-### Azure Container Instances
-```bash
-az container create \
-    --resource-group myResourceGroup \
-    --name vitals-anomaly-api \
-    --image vitals-anomaly-api:latest \
-    --ports 5000
-```
-
-### AWS ECS/Fargate
-```bash
-# Push to ECR and deploy via ECS task definition
-aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-docker tag vitals-anomaly-api:latest <account>.dkr.ecr.<region>.amazonaws.com/vitals-anomaly-api:latest
-docker push <account>.dkr.ecr.<region>.amazonaws.com/vitals-anomaly-api:latest
-```
-
-## Project Structure
-```
+~~~
 .
-├── app.py                 # Flask application
-├── Dockerfile             # Docker container definition
-├── docker-compose.yml     # Local orchestration
-├── requirements.txt       # Python dependencies
-├── model/                 # Trained model storage
-└── README.md             # Documentation
-```
+├── app.py
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── model/
+└── README.md
+~~~
+
+## Related project
+
+**MSc thesis:** [Human Vitals Anomaly Detection Thesis](https://github.com/eswarsurya/human-vitals-anomaly-detection-thesis)
 
 ## Author
 
-**Eswar Surya Danaboina**  
-MSc Data Analytics | Dublin Business School  
-[Portfolio](https://eswarsurya.github.io/eswar-portfolio/) | [LinkedIn](https://linkedin.com/in/eswarsurya76)
+**Eswar Surya Danaboina** · MSc Data Analytics · Dublin, Ireland
+
+Portfolio: https://eswardanaboina.vercel.app/  
+LinkedIn: https://www.linkedin.com/in/eswarsurya76/
 
 ## License
 
-MIT License - Academic project for demonstration purposes.
+MIT
