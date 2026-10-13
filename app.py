@@ -1,145 +1,129 @@
-"""
-Flask API for Human Vitals Anomaly Detection
-Isolation Forest model serving endpoint
-"""
-from flask import Flask, request, jsonify
-import joblib
-import numpy as np
-import pandas as pd
-from sklearn.ensemble import IsolationForest
+"""Flask API serving an Isolation Forest anomaly model for human vital signs."""
+
+import math
 import os
 
-app = Flask(__name__)
+import joblib
+import numpy as np
+from flask import Flask, jsonify, request
 
-# Load pre-trained model (we'll create a dummy one if not exists)
-MODEL_PATH = os.path.join('model', 'isolation_forest_model.pkl')
+MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join("model", "vitals_iforest.joblib"))
+MAX_BATCH = 1000
 
-def load_or_create_model():
-    """Load existing model or create a dummy one for demo"""
-    if os.path.exists(MODEL_PATH):
-        return joblib.load(MODEL_PATH)
+# Physically possible ranges. Values outside these are rejected as bad input,
+# not scored: the model should only judge readings a sensor could produce.
+VALID_RANGE = {
+    "heart_rate": (20, 250),
+    "bp_systolic": (50, 260),
+    "bp_diastolic": (20, 160),
+    "temperature": (30.0, 45.0),
+    "spo2": (50.0, 100.0),
+}
+
+
+class BadInput(ValueError):
+    pass
+
+
+def load_bundle(path: str) -> dict:
+    bundle = joblib.load(path)
+    if bundle.get("features") != list(VALID_RANGE):
+        raise RuntimeError(f"Model at {path} expects features {bundle.get('features')}")
+    return bundle
+
+
+def parse_row(row, index: int) -> list[float]:
+    """Accept {"heart_rate": ..} or a 5-item list in feature order; return floats."""
+    names = list(VALID_RANGE)
+    if isinstance(row, dict):
+        missing = [n for n in names if n not in row]
+        if missing:
+            raise BadInput(f"row {index}: missing {', '.join(missing)}")
+        values = [row[n] for n in names]
+    elif isinstance(row, list) and len(row) == len(names):
+        values = row
     else:
-        # Create a dummy model for demonstration
-        # In production, replace with your actual trained model
-        np.random.seed(42)
-        dummy_data = np.random.randn(1000, 5)  # 5 features: heart_rate, bp_systolic, bp_diastolic, temperature, spo2
-        model = IsolationForest(contamination=0.05, random_state=42)
-        model.fit(dummy_data)
-        joblib.dump(model, MODEL_PATH)
-        return model
+        raise BadInput(f"row {index}: expected an object with {', '.join(names)} or a list of 5 numbers")
+    out = []
+    for name, v in zip(names, values):
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise BadInput(f"row {index}: {name} must be a number")
+        lo, hi = VALID_RANGE[name]
+        if not lo <= v <= hi:
+            raise BadInput(f"row {index}: {name}={v} is outside the possible range {lo}-{hi}")
+        out.append(float(v))
+    return out
 
-model = load_or_create_model()
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'model': 'isolation_forest_v1',
-        'version': '1.0.0'
-    })
+def parse_body(body) -> np.ndarray:
+    if not isinstance(body, dict):
+        raise BadInput("send a JSON object")
+    rows = body.get("data", [body])
+    if not isinstance(rows, list) or not rows:
+        raise BadInput("'data' must be a non-empty list")
+    if len(rows) > MAX_BATCH:
+        raise BadInput(f"at most {MAX_BATCH} rows per request")
+    return np.array([parse_row(r, i) for i, r in enumerate(rows)])
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    """
-    Predict anomaly for human vitals
 
-    Expected JSON format:
-    {
-        "heart_rate": 75,
-        "bp_systolic": 120,
-        "bp_diastolic": 80,
-        "temperature": 36.6,
-        "spo2": 98
-    }
+def create_app(model_path: str = MODEL_PATH) -> Flask:
+    app = Flask(__name__)
+    bundle = load_bundle(model_path)
+    model = bundle["model"]
+    mean, std = np.array(bundle["mean"]), np.array(bundle["std"])
+    names = bundle["features"]
 
-    Or batch:
-    {
-        "data": [
-            [75, 120, 80, 36.6, 98],
-            [150, 180, 110, 39.5, 85]
+    @app.errorhandler(BadInput)
+    def bad_input(e):
+        return jsonify(success=False, error=str(e)), 400
+
+    @app.get("/health")
+    def health():
+        return jsonify(
+            status="ok",
+            model="isolation_forest",
+            trained_rows=bundle["rows"],
+            trained_at=bundle["trained_at"],
+        )
+
+    @app.post("/predict")
+    def predict():
+        x = parse_body(request.get_json(silent=True))
+        labels, scores = model.predict(x), model.decision_function(x)
+        results = [
+            {"sample_id": i, "is_anomaly": bool(lab == -1), "anomaly_score": round(float(s), 4)}
+            for i, (lab, s) in enumerate(zip(labels, scores))
         ]
-    }
-    """
-    try:
-        data = request.get_json()
+        return jsonify(
+            success=True,
+            predictions=results,
+            total_samples=len(results),
+            anomalies_detected=sum(r["is_anomaly"] for r in results),
+        )
 
-        # Single prediction
-        if 'data' not in data:
-            features = np.array([[
-                data.get('heart_rate', 0),
-                data.get('bp_systolic', 0),
-                data.get('bp_diastolic', 0),
-                data.get('temperature', 0),
-                data.get('spo2', 0)
-            ]])
-        else:
-            # Batch prediction
-            features = np.array(data['data'])
+    @app.post("/explain")
+    def explain():
+        x = parse_body(request.get_json(silent=True))
+        if len(x) != 1:
+            raise BadInput("/explain takes one reading at a time")
+        z = (x[0] - mean) / np.where(std == 0, 1, std)
+        ranked = sorted(zip(names, x[0], z), key=lambda t: -abs(t[2]))
+        score = float(model.decision_function(x)[0])
+        return jsonify(
+            success=True,
+            is_anomaly=bool(model.predict(x)[0] == -1),
+            anomaly_score=round(score, 4),
+            # How far each reading sits from the training average, in standard deviations.
+            # A simple, fast explanation; the thesis notebooks use SHAP for the full picture.
+            contributions=[
+                {"feature": n, "value": float(v), "std_from_mean": round(float(s), 2)} for n, v, s in ranked
+            ],
+        )
 
-        # Predict: -1 = anomaly, 1 = normal
-        predictions = model.predict(features)
-        scores = model.decision_function(features)
+    return app
 
-        results = []
-        for i, (pred, score) in enumerate(zip(predictions, scores)):
-            results.append({
-                'sample_id': i,
-                'is_anomaly': bool(pred == -1),
-                'anomaly_score': float(score),
-                'confidence': float(abs(score)),
-                'status': 'ANOMALY' if pred == -1 else 'NORMAL'
-            })
 
-        return jsonify({
-            'success': True,
-            'model': 'isolation_forest_v1',
-            'predictions': results,
-            'total_samples': len(results),
-            'anomalies_detected': sum(1 for r in results if r['is_anomaly'])
-        })
+app = create_app() if os.path.exists(MODEL_PATH) else None
 
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
-
-@app.route('/explain', methods=['POST'])
-def explain():
-    """
-    Simple explanation endpoint (SHAP-like feature importance)
-    Returns which features contributed most to anomaly score
-    """
-    try:
-        data = request.get_json()
-        features = np.array([[
-            data.get('heart_rate', 0),
-            data.get('bp_systolic', 0),
-            data.get('bp_diastolic', 0),
-            data.get('temperature', 0),
-            data.get('spo2', 0)
-        ]])
-
-        score = model.decision_function(features)[0]
-
-        # Simple feature contribution (approximation)
-        feature_names = ['heart_rate', 'bp_systolic', 'bp_diastolic', 'temperature', 'spo2']
-
-        return jsonify({
-            'success': True,
-            'anomaly_score': float(score),
-            'is_anomaly': bool(score < 0),
-            'feature_names': feature_names,
-            'input_values': features[0].tolist(),
-            'note': 'For full SHAP explainability, integrate shap library'
-        })
-
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 400
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+if __name__ == "__main__":
+    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))

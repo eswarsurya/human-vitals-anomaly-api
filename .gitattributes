@@ -1,0 +1,4 @@
+# Thesis notebooks and data are reference material; the service itself is Python.
+*.ipynb linguist-documentation
+data/** linguist-vendored
+docs/** linguist-documentation
